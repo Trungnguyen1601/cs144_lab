@@ -69,7 +69,9 @@ struct ctcp_state {
   uint32_t last_byte_output;
 
   linked_list_t *send_list;
-  linked_list_t *recv_list;                          
+  linked_list_t *recv_list;   
+  linked_list_t *linked_list_unack_segment;
+                       
 
   /* FIXME: Add other needed fields. */
 };
@@ -95,7 +97,6 @@ static ctcp_state_t *state_list;
 
 ctcp_state_send_t *state_send;
 ctcp_state_receive_t *state_receive;
-linked_list_t *linked_list_unack_segment;
 
 // int current_index_send = 0;
 
@@ -147,7 +148,7 @@ ctcp_state_t *ctcp_init(conn_t *conn, ctcp_config_t *cfg) {
 
   state->send_list = ll_create();
   state->recv_list = ll_create();
-  linked_list_unack_segment = ll_create();
+  state->linked_list_unack_segment = ll_create();
 
 
   state_send = (ctcp_state_send_t*)calloc(sizeof(ctcp_state_send_t),1);
@@ -312,6 +313,8 @@ void ctcp_send_sliding_window(ctcp_state_t *state)
     }
 
     ctcp_send_segment(state,packet);
+    add_list_unacksegment(state->linked_list_unack_segment,packet);
+
     //sleep(1);
 
     //state->last_byte_read = packet->segment->seqno;
@@ -353,7 +356,6 @@ void ctcp_send_segment(ctcp_state_t *state,packet_t *packet)
 {
   ctcp_segment_t * data_segment = generate_data_segment(state,packet->segment);
   conn_send(state->conn,data_segment,ntohs(data_segment->len));
-  add_list_unacksegment(linked_list_unack_segment,packet);
 
 }
 
@@ -399,6 +401,7 @@ void ctcp_receive(ctcp_state_t *state, ctcp_segment_t *segment, size_t len) {
     packet_recv->segment->seqno = segment->seqno;
     packet_recv->segment->len = segment->len; 
     memcpy(packet_recv->segment->data,segment->data,data_len);
+    fprintf(stderr,"seqno %d\n",packet_recv->segment->seqno);
 
     if (segment->flags & ACK)
     {
@@ -419,8 +422,7 @@ void ctcp_receive(ctcp_state_t *state, ctcp_segment_t *segment, size_t len) {
         add_packet_in_order(state->recv_list,packet_recv);
         packet_recv->segment->ackno = state->last_byte_ack;
         ctcp_send_ACK(state,packet_recv);
-
-        remove_packet_in_unacksegment(linked_list_unack_segment,packet_recv);
+        remove_packet_in_unacksegment(state->linked_list_unack_segment,packet_recv);
       }
       else if (segment->seqno == state_receive->recv_base)
       {
@@ -434,7 +436,7 @@ void ctcp_receive(ctcp_state_t *state, ctcp_segment_t *segment, size_t len) {
           packet_recv->segment->ackno = state->last_byte_ack;
           ctcp_send_ACK(state,packet_recv);
 
-          remove_packet_in_unacksegment(linked_list_unack_segment,packet_recv);
+          remove_packet_in_unacksegment(state->linked_list_unack_segment,packet_recv);
           fprintf(stderr,"1\n");
           temp = node;
           //node = node->next;
@@ -455,7 +457,7 @@ void ctcp_receive(ctcp_state_t *state, ctcp_segment_t *segment, size_t len) {
             data_len = packet_recv->segment->len - sizeof(ctcp_segment_t);
             conn_output(state->conn,packet_recv->segment->data,data_len);
             state_receive->recv_base += data_len;
-            
+
             temp = node;
             node = node->next;
             ll_remove(state->recv_list,temp); 
@@ -548,7 +550,7 @@ void ctcp_timer() {
   ll_node_t *node;
   while (state_current != NULL )
   {
-    node = ll_front(linked_list_unack_segment);
+    node = ll_front(state_current->linked_list_unack_segment);
     packet_t *packet;
 
     while (node != NULL )
@@ -660,6 +662,8 @@ int32_t check_continuous_in_recvlist(linked_list_t *list,packet_t *packet)
 void add_list_unacksegment(linked_list_t *list,packet_t *packet)
 {
   ll_add(list,packet);
+  ll_node_t *node = ll_front(list);
+  packet_t *packet1 = (packet_t*)node->object; 
 }
 
 void add_packet_in_order(linked_list_t *list, packet_t *packet)
@@ -700,6 +704,7 @@ void remove_packet_in_unacksegment(linked_list_t *list,packet_t *packet_search)
   while(node)
   {
     packet = (packet_t*)node->object;
+    fprintf(stderr,"packet seqno %d\n",packet->segment->seqno);
     if (packet->segment->seqno == packet_search->segment->seqno)
     {
       ll_remove(list,node);
