@@ -117,7 +117,7 @@ void ctcp_send_ACK(ctcp_state_t* state,packet_t* packet);
 int32_t check_continuous_in_recvlist(linked_list_t *list,packet_t *packet);
 void add_packet_in_order(linked_list_t *list, packet_t *packet);
 void add_list_unacksegment(linked_list_t *list,packet_t *packet);
-void remove_packet_in_unacksegment(linked_list_t *list,packet_t *packet);
+void remove_packet_in_unacksegment(linked_list_t *list,packet_t *packet_search);
 
 
 ctcp_state_t *ctcp_init(conn_t *conn, ctcp_config_t *cfg) {
@@ -252,7 +252,7 @@ void ctcp_read(ctcp_state_t *state) {
     memcpy(packet_data->segment->data,buffer,bytes_read);
     state->last_byte_read += bytes_read;
     ll_add(state->send_list,packet_data);
-    add_list_unacksegment(linked_list_unack_segment,packet_data);
+    //add_list_unacksegment(linked_list_unack_segment,packet_data);
     //sleep(2);
   }
   //int index;
@@ -312,7 +312,7 @@ void ctcp_send_sliding_window(ctcp_state_t *state)
     }
 
     ctcp_send_segment(state,packet);
-    sleep(1);
+    //sleep(1);
 
     //state->last_byte_read = packet->segment->seqno;
     state->last_byte_ack = 1;
@@ -353,6 +353,7 @@ void ctcp_send_segment(ctcp_state_t *state,packet_t *packet)
 {
   ctcp_segment_t * data_segment = generate_data_segment(state,packet->segment);
   conn_send(state->conn,data_segment,ntohs(data_segment->len));
+  add_list_unacksegment(linked_list_unack_segment,packet);
 
 }
 
@@ -378,6 +379,7 @@ void ctcp_receive(ctcp_state_t *state, ctcp_segment_t *segment, size_t len) {
   fprintf(stderr,"check sum %d : %d\n",checksum_recv,checksum_check);
   if (checksum_recv != checksum_check)
   {
+    fprintf(stderr,"corrupt\n");
     free(segment);
     return;
   }
@@ -434,7 +436,6 @@ void ctcp_receive(ctcp_state_t *state, ctcp_segment_t *segment, size_t len) {
 
           remove_packet_in_unacksegment(linked_list_unack_segment,packet_recv);
           fprintf(stderr,"1\n");
-
           temp = node;
           //node = node->next;
           //ll_remove(state->recv_list,temp);
@@ -454,7 +455,7 @@ void ctcp_receive(ctcp_state_t *state, ctcp_segment_t *segment, size_t len) {
             data_len = packet_recv->segment->len - sizeof(ctcp_segment_t);
             conn_output(state->conn,packet_recv->segment->data,data_len);
             state_receive->recv_base += data_len;
-
+            
             temp = node;
             node = node->next;
             ll_remove(state->recv_list,temp); 
@@ -545,7 +546,6 @@ void ctcp_timer() {
   ctcp_state_t *state_current;
   state_current = state_list;
   ll_node_t *node;
-
   while (state_current != NULL )
   {
     node = ll_front(linked_list_unack_segment);
@@ -565,8 +565,9 @@ void ctcp_timer() {
 
           if (conn_send(state_current->conn,packet->segment,ntohs(packet->segment->len) ) == -1)
           {
-            //fprintf(stderr, "Error\n");
+            fprintf(stderr, "Error\n");
           }
+          fprintf(stderr,"Time %ld : %ld\n",current_time(),packet->last_time_send);
           packet->num_retransmit ++;
           packet->last_time_send = current_time();
         }
@@ -690,15 +691,25 @@ void add_packet_in_order(linked_list_t *list, packet_t *packet)
     node = node->next;
   }
 }
-void remove_packet_in_unacksegment(linked_list_t *list,packet_t *packet)
+void remove_packet_in_unacksegment(linked_list_t *list,packet_t *packet_search)
 {
   ll_node_t *node;
-  if (packet != NULL)
+  packet_t *packet;
+  bool check_find = false;
+  node = ll_front(list);
+  while(node)
   {
-    node = ll_find(list,packet);
-    if (node)
+    packet = (packet_t*)node->object;
+    if (packet->segment->seqno == packet_search->segment->seqno)
     {
       ll_remove(list,node);
+      check_find = true;
+      return;
     }
+    node = node->next;
+  }
+  if (!check_find)
+  {
+    fprintf(stderr,"err find\n");
   }
 }
